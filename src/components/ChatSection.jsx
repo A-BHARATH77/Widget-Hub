@@ -36,96 +36,112 @@ const ChatSection = () => {
   }, [isExpanded]);
 
   const formatGeminiResponse = (response, isImageAnalysis = false) => {
-    // Clean up the response by removing markdown formatting
-    let cleanResponse = response
-      .replace(/\*\*/g, '') // Remove bold markdown
-      .replace(/\*/g, '')   // Remove bullet points
-      .replace(/`/g, '');   // Remove backticks
-    
-    // If it's a simple response without structured widgets, just return it
-    if (!cleanResponse.includes('Widget Name:')) {
-      return `<div class="p-3 bg-gray-50 rounded">${cleanResponse.replace(/\n/g, '<br/>')}</div>`;
-    }
-    
-    // Parse the structured response
-    const lines = cleanResponse.split('\n').filter(line => line.trim());
-    let formattedWidgets = [];
-    let currentWidget = {};
-    let isImageAnalysisLocal = isImageAnalysis; // Store for use in parsing
-    
-    for (let line of lines) {
-      line = line.trim();
-      
-      // Check for widget name line (e.g., "1. Widget Name: Text")
-      if (line.match(/^\d+\.\s*Widget Name:/)) {
-        // Save previous widget if exists
-        if (currentWidget.name) {
-          formattedWidgets.push(currentWidget);
-        }
-        // Start new widget
-        const nameMatch = line.match(/Widget Name:\s*(.+)$/);
-        currentWidget = {
-          name: nameMatch ? nameMatch[1].trim() : 'Unknown Widget',
-          description: ''
-        };
+    // Normalize and trim
+    let cleanResponse = (response || '').replace(/```/g, '').trim();
+    // Remove repeated markdown bold/italic markers but keep content structure
+    cleanResponse = cleanResponse.replace(/\*\*/g, '').replace(/\*/g, '').replace(/`/g, '');
+
+    // Quick return if very short
+    if (!cleanResponse) return `<div class="p-3 bg-gray-50 rounded">No response from the assistant.</div>`;
+
+    // Split into meaningful lines
+    const lines = cleanResponse.split(/\r?\n/).map(l => l.trim()).filter(Boolean);
+
+    // Attempt to parse widgets from common formats:
+    // - Numbered lists: "1. Image"
+    // - Bulleted lists: "- Image" or "* Image"
+    // - Name line followed by "Description: ..."
+    const widgets = [];
+    let current = null;
+
+    const pushCurrent = () => {
+      if (current && (current.name || current.description)) {
+        // Ensure description exists
+        current.description = (current.description || '').trim();
+        widgets.push(current);
       }
-      // Check for brief description
-      else if (line.includes('Brief Description:')) {
-        let description = line.replace('Brief Description:', '').trim();
-        // For image analysis, limit description to 2-3 lines
-        if (isImageAnalysisLocal) {
-          const sentences = description.split('.').filter(s => s.trim());
-          description = sentences.slice(0, 2).join('.');
-          if (sentences.length > 2) description += '.';
-        }
-        currentWidget.description = description;
+      current = null;
+    };
+
+    for (let i = 0; i < lines.length; i++) {
+      const line = lines[i];
+
+      // skip headings
+      if (/^#{1,6}\s+/.test(line)) continue;
+
+      // numbered like: "1. Image"
+      let m = line.match(/^\d+\.\s*(.+)$/);
+      if (m) {
+        // start new widget
+        pushCurrent();
+        current = { name: m[1].trim(), description: '' };
+        continue;
+      }
+
+      // bulleted: - Image or * Image or • Image
+      m = line.match(/^[\-\*\u2022]\s*(.+)$/);
+      if (m) {
+        pushCurrent();
+        current = { name: m[1].trim(), description: '' };
+        continue;
+      }
+
+      // explicit "Description:" line
+      if (/^description\s*[:\-]/i.test(line)) {
+        const desc = line.replace(/^description\s*[:\-]\s*/i, '').trim();
+        if (!current) current = { name: 'Unknown', description: desc };
+        else current.description += (current.description ? ' ' : '') + desc;
+        continue;
+      }
+
+      // If line looks like a short title (word caps) and next line is description, treat as name
+      const looksLikeName = /^[A-Z][A-Za-z0-9 _()\-]{0,60}$/.test(line) && i + 1 < lines.length && /^description\s*[:\-]/i.test(lines[i + 1]);
+      if (looksLikeName) {
+        pushCurrent();
+        current = { name: line.trim(), description: '' };
+        continue;
+      }
+
+      // If we reach here and there is a current widget, append this line to its description
+      if (current) {
+        current.description += (current.description ? ' ' : '') + line;
+        continue;
+      }
+
+      // As a last resort, the line might contain "Name - description" or "Image: Description"
+      let pair = line.match(/^(.+?)\s*[:\-]\s*(.+)$/);
+      if (pair) {
+        pushCurrent();
+        current = { name: pair[1].trim(), description: pair[2].trim() };
+        continue;
       }
     }
-    
-    // Add the last widget
-    if (currentWidget.name) {
-      formattedWidgets.push(currentWidget);
+
+    // push final
+    pushCurrent();
+
+    // If we didn't detect structured widgets, fallback to showing the cleaned response
+    if (widgets.length === 0) {
+      return `<div class="p-3 bg-gray-50 rounded text-sm leading-relaxed">${cleanResponse.replace(/\n/g, '<br/>')}</div>`;
     }
-    
-    if (formattedWidgets.length === 0) {
-      return `<div class="p-3 bg-gray-50 rounded">${cleanResponse.replace(/\n/g, '<br/>')}</div>`;
-    }
-    
-    // Different formatting for image analysis vs text description
-    if (isImageAnalysis) {
-      // For image analysis, show widgets in a more visual, structured way
-      const widgetList = formattedWidgets.map(widget => 
-        `<code class="bg-blue-100 px-2 py-1 rounded text-sm font-mono text-blue-800">${widget.name}</code>`
-      ).join(', ');
-      
-      return `<div class="space-y-3">
-        <div class="p-3 bg-gradient-to-r from-blue-50 to-purple-50 rounded-lg border-l-4 border-blue-500">
-          <div class="font-semibold text-blue-800 mb-2">🎨 Recommended Widgets for this UI:</div>
-          <div class="text-gray-700 mb-3">${widgetList}</div>
-        </div>
-        ${formattedWidgets.map(widget => 
-          `<div class="p-4 bg-white rounded-lg border border-gray-200 shadow-sm">
-            <div class="flex items-center mb-2">
-              <div class="w-8 h-8 bg-gradient-to-r from-blue-500 to-purple-500 rounded-full flex items-center justify-center text-white font-bold text-sm mr-3">
-                ${widget.name.charAt(0)}
-              </div>
-              <h4 class="font-semibold text-gray-800">${widget.name}</h4>
+
+    // Render widgets as cards in a responsive grid
+    const cardsHtml = widgets.map(w => {
+      const initials = (w.name || 'W').trim().charAt(0).toUpperCase();
+      const descHtml = (w.description || '').replace(/\n/g, '<br/>');
+      return `
+        <div class="p-4 bg-white rounded-2xl border border-gray-100 shadow hover:shadow-lg transition">
+          <div class="flex items-start gap-4">
+            <div class="w-10 h-10 flex items-center justify-center rounded-full bg-gradient-to-r from-blue-500 to-purple-500 text-white font-semibold">${initials}</div>
+            <div class="flex-1">
+              <div class="text-lg font-semibold text-gray-800">${w.name}</div>
+              <p class="text-gray-600 mt-1 text-sm">${descHtml}</p>
             </div>
-            <p class="text-gray-600 ml-11">${widget.description}</p>
-          </div>`
-        ).join('')}
-      </div>`;
-    } else {
-      // For text description, use the simpler format
-      const formattedLines = formattedWidgets.map(widget => 
-        `<div class="mb-4 p-4 bg-blue-50 rounded-lg border-l-4 border-blue-500">
-          <div class="font-semibold text-blue-800 mb-2">Widget: <code class="bg-blue-100 px-2 py-1 rounded text-sm font-mono">${widget.name}</code></div>
-          <div class="text-gray-700"><strong>Description:</strong> ${widget.description}</div>
-        </div>`
-      );
-      
-      return `<div class="space-y-2">${formattedLines.join('')}</div>`;
-    }
+          </div>
+        </div>`;
+    }).join('');
+
+    return `<div class="grid grid-cols-1 md:grid-cols-2 gap-4">${cardsHtml}</div>`;
   };
 
   const handleSend = async () => {
