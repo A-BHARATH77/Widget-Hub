@@ -141,7 +141,8 @@ const ChatSection = () => {
         </div>`;
     }).join('');
 
-    return `<div class="grid grid-cols-1 md:grid-cols-2 gap-4">${cardsHtml}</div>`;
+    // Render cards in a single vertical column (one below another)
+    return `<div class="space-y-4">${cardsHtml}</div>`;
   };
 
   const handleSend = async () => {
